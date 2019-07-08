@@ -16,11 +16,42 @@
 import abc
 from typing import (List, Union)
 
-from cirq import circuits, schedules, study
+from cirq import circuits, schedules, study, protocols, ops
+import numpy as np
 
 
 class Sampler(metaclass=abc.ABCMeta):
     """Something capable of sampling quantum circuits. Simulator or hardware."""
+
+    def run_symmetrized_readout(self,
+                        program:Union[circuits.Circuit, schedules.Schedule],
+                        param_resolver: 'study.ParamResolverOrSimilarType'=None,
+                        repetitions:int=2)->study.TrialResult:
+        if repetitions % 2 != 0:
+            raise ValueError("run_symmetrized_readout requires an even number of repetitions")
+
+
+        half_reps = repetitions // 2
+        result_I = self.run(program, param_resolver, half_reps)
+
+        program_X = program.copy()
+        # Make sure to save this to a list or you will get into an infinite generator
+        imeasures = list(program_X.findall_operations(protocols.is_measurement))
+        for i, measure in imeasures:
+            program_X.insert(i, [ops.X(qubit) for qubit in measure.qubits])
+
+        result_X = self.run(program_X, param_resolver, half_reps)
+        comb_meas = {
+            k: np.concatenate((result_I.measurements[k], np.logical_not(result_X.measurements[k])),
+                              axis=0) for k in result_I.measurements}
+
+        return study.TrialResult(
+           params = result_I.params ,
+            measurements=comb_meas,
+            repetitions=result_I.repetitions + result_X.repetitions
+        )
+
+
 
     def run(
             self,
